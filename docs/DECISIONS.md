@@ -244,6 +244,45 @@ regression/GBM predicting P(relevant)).
 useful for sorting within a group; and lambdarank needs at least one
 positive per group to produce a useful gradient signal for that group.
 
+## Why retrieval-only top-10 is the worst of the four models, yet the full pipeline is the best
+
+**Observation:** on test, taking the two-tower retriever's raw top-10 by
+similarity score gets Recall@10 = 0.0318 / NDCG@10 = 0.0140 — worse than
+*both* popularity (0.0393 / 0.0193) and ALS (0.0654 / 0.0329). But reranking
+those same retrieval candidates with the LightGBM ranker gets Recall@10 =
+0.0828 / NDCG@10 = 0.0423 — beating every other model, including ALS, by a
+wide margin (+27% Recall@10, +29% NDCG@10 relative to ALS).
+
+**Why retrieval-only top-10 is weak:** the two-tower model is trained with
+in-batch softmax loss over the *entire batch of candidates*, and evaluated
+at Recall@500 — its objective only asks "is the right item somewhere in a
+list of 500," never "is the right item in the top 10 specifically." A model
+can be very good at that recall-oriented objective while producing a poor
+*fine-grained ordering* within its own candidate list, because nothing in
+its training signal ever rewarded getting the single best item into the
+first 10 positions out of 500. This is expected, not a bug — it's precisely
+the reason a two-stage system exists instead of shipping retrieval's output
+directly.
+
+**Why the full pipeline still wins:** the ranker only has to solve an easier
+problem — reordering ~500 candidates that retrieval already identified as
+plausible — and it does so with a rich, supervised, position-aware objective
+(LambdaRank) plus features retrieval never had access to (item popularity,
+average rating, explicit genre overlap, user activity level). It also
+starts from a candidate pool with much higher recall headroom (0.65 at
+K=500) than ALS's implicit top-10 cutoff ever offers the ranker a chance to
+exploit for *popularity/rating* signal on top of embedding similarity. The
+combination — broad, taste-aware candidate generation (Stage 1) plus
+precise, feature-rich reordering (Stage 2) — is a better division of labor
+than either a single similarity score (retrieval-only) or a single
+collaborative-filtering score (ALS) alone.
+
+**What this demonstrates:** the two-stage architecture's value isn't that
+Stage 1 needs to beat every single-stage baseline on its own — it's that
+combining a recall-oriented Stage 1 with a precision-oriented Stage 2
+produces a better final Top-10 than any single model here, even one (ALS)
+that beats Stage 1 in isolation.
+
 ## Leakage prevention in ranker features
 
 **Decision:** every statistic used as a feature is computed "as of" the split
@@ -387,3 +426,46 @@ was fixed with the standard `KMP_DUPLICATE_LIB_OK=TRUE` workaround, and
 import order (`torch` before `faiss`) mattered for a third variant of the
 same underlying issue. All three fixes live together in
 `src/retrieval/index.py`, the one module that imports both libraries.
+
+**Q: Your retrieval-only top-10 (0.0318 Recall@10) is worse than both
+popularity (0.0393) and ALS (0.0654), yet your full pipeline (0.0828) beats
+all of them. How can Stage 1 alone be the worst option while Stage 1 + Stage
+2 together is the best?**
+A: See "Why retrieval-only top-10 is the worst of the four models, yet the
+full pipeline is the best" above — in short: the two-tower model is trained
+and evaluated to get the right item *somewhere in 500 candidates*
+(Recall@500), and nothing in that objective rewards precise ordering within
+the first 10 of those 500, so taking its raw top-10 directly is a poor use
+of what it's actually good at. The LightGBM ranker solves an easier,
+different problem — reordering a pool retrieval already narrowed down — with
+a position-aware objective (LambdaRank) and features retrieval never sees
+(popularity, average rating, explicit genre overlap). The two-stage
+architecture's value is in that division of labor, not in Stage 1 winning
+on its own; a broad recall-oriented candidate generator feeding a precise
+reordering model can beat every single-stage baseline even when the
+candidate generator loses to one of those baselines by itself.
+
+**Q: How do you know your ranker training data was built correctly, without
+just trusting the code?**
+A: A concrete numeric cross-check: the ranker's training table has 4,179
+positive labels out of 6,035 user-groups. Phase 2 independently reported
+Recall@500 = 0.6925 on val for the same retrieval model. 0.6925 x 6035 ≈
+4,179 — the exact same number, derived two different ways (one from the
+metrics module's `mean_at_k`, the other from literally counting `label == 1`
+rows in the candidate table). That agreement is strong evidence the
+candidate generation, exclusion logic, and labeling in
+`src/ranking/features.py` are consistent with the retrieval evaluation in
+`src/retrieval/evaluate.py`, rather than two independently-buggy
+implementations that happen to run without crashing.
+
+**Q: Why did `import lightgbm` work earlier in the project but fail with a
+`libomp.dylib` load error inside `src/ranking/train.py`?**
+A: The earlier successful import happened in a line that also imported
+`torch` first; torch's own bundled OpenMP runtime happened to satisfy
+LightGBM's native library's dependency on `libomp.dylib` as a side effect,
+which masked the fact that Homebrew's `libomp` — LightGBM's actual declared
+dependency on macOS — was never installed on this machine. `train.py` has
+no reason to import `torch`, so the missing dependency surfaced as a hard
+`OSError` there. The correct fix was installing the real dependency
+(`brew install libomp`), not relying on an incidental import order in a
+script that shouldn't need `torch` at all.

@@ -15,3 +15,12 @@
 |---|---|---|---|---|---|
 | Two-Tower Retrieval | val | 6035 | 0.6925 | 0.1140 | 1.0000 |
 | Two-Tower Retrieval | test | 6037 | 0.6507 | 0.1061 | 1.0000 |
+
+## Phase 3: Ranking (full pipeline)
+
+| Model | Split | n_users | Recall@10 | NDCG@10 | Coverage@10 |
+|---|---|---|---|---|---|
+| Popularity | test | 6037 | 0.0393 | 0.0193 | 0.0296 |
+| ALS | test | 6037 | 0.0654 | 0.0329 | 0.4378 |
+| Retrieval-only (top-10) | test | 6037 | 0.0318 | 0.0140 | 0.9593 |
+| Retrieval + Ranking (full pipeline) | test | 6037 | 0.0828 | 0.0423 | 0.5228 |

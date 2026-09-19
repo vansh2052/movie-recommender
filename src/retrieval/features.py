@@ -44,12 +44,14 @@ def build_item_vocab(movies_df: pd.DataFrame, year_bucket_size: int = 10) -> dic
     }
 
 
-def _compute_user_genre_prefs(train_df: pd.DataFrame, movies_df: pd.DataFrame, ordered_user_ids: list, genre_cols: list) -> np.ndarray:
+def compute_user_genre_prefs(history_df: pd.DataFrame, movies_df: pd.DataFrame, ordered_user_ids: list, genre_cols: list) -> np.ndarray:
     """Per-user genre-preference vector: the mean of the genre multi-hot
-    vectors of every movie the user positively interacted with in train.
-    Each entry is "the fraction of this user's liked movies with that
-    genre" — a real behavioral signal, computed from train only."""
-    merged = train_df[["user_id", "movie_id"]].merge(
+    vectors of every movie the user positively interacted with in
+    ``history_df``. Each entry is "the fraction of this user's liked movies
+    with that genre" — a real behavioral signal. Also reused by the Phase 3
+    ranker's features, passing train-only or train+val as ``history_df``
+    depending on which split is being predicted (see docs/DECISIONS.md)."""
+    merged = history_df[["user_id", "movie_id"]].merge(
         movies_df[["movie_id"] + genre_cols], on="movie_id", how="left"
     )
     genre_mean = merged.groupby("user_id")[genre_cols].mean()
@@ -76,7 +78,7 @@ def build_user_vocab(train_df: pd.DataFrame, users_df: pd.DataFrame, movies_df: 
     gender_idx = ordered_users["gender"].map(gender_to_idx).values.astype("int64")
 
     genre_cols = [f"genre_{g}" for g in GENRES]
-    genre_pref_matrix = _compute_user_genre_prefs(train_df, movies_df, user_ids, genre_cols)
+    genre_pref_matrix = compute_user_genre_prefs(train_df, movies_df, user_ids, genre_cols)
 
     return {
         "user_id_to_idx": user_id_to_idx,

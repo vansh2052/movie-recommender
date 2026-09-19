@@ -189,3 +189,68 @@ to ALS (0.7502) — consistent with the dataset-size argument in
 `docs/DECISIONS.md`: even with real behavioral signal, a small feed-forward
 tower trained with noisy contrastive gradients is still working with less
 information per update than ALS's exact alternating least-squares solve.
+
+## Phase 3 — Ranking (LightGBM LambdaRank)
+
+### Step 8: Ranker training data, LambdaRank training, full-pipeline evaluation
+
+`src/ranking/features.py` builds the shared candidate table used for both
+training and evaluation: Stage 1 (frozen two-tower + FAISS) candidates for a
+set of users, joined with user features (activity count, avg rating,
+train-only-computed genre-preference vector, reusing
+`compute_user_genre_prefs` from `src/retrieval/features.py`), item features
+(popularity, avg rating, genre multi-hot, year), and cross features (genre
+overlap, the Stage 1 retrieval similarity score) — vectorized with numpy per
+user rather than row-by-row pandas lookups, since a full candidate table is
+~3M rows. `src/ranking/build_dataset.py` builds the **training** table:
+candidates from **train-only** history, labeled 1 if the candidate is the
+user's **val**-split positive, features from **train only**.
+`src/ranking/train.py` fits `lightgbm.LGBMRanker(objective="lambdarank")`
+grouped by user. `src/ranking/evaluate.py` builds the **test** evaluation
+table (candidates + features from **train + val**, labels from **test**),
+scores it with the trained ranker, reranks each user's candidates, and
+reports Recall@10/NDCG@10 for popularity, ALS (both refit here for a
+self-contained comparison), retrieval-only top-10, and the full pipeline.
+
+**How to run:** `make train-ranking` (build + train) then `make eval-ranking`.
+
+**Results (real run on ml-1m, see `reports/results.md`):**
+
+| Model | Recall@10 | NDCG@10 | Coverage@10 |
+|---|---|---|---|
+| Popularity | 0.0393 | 0.0193 | 0.0296 |
+| ALS | 0.0654 | 0.0329 | 0.4378 |
+| Retrieval-only (top-10) | 0.0318 | 0.0140 | 0.9593 |
+| Retrieval + Ranking (full pipeline) | 0.0828 | 0.0423 | 0.5228 |
+
+The training table had 3,017,500 rows across 6,035 user-groups, with 4,179
+positive labels (matches the Phase 2 val Recall@500 of 0.6925: 0.6925 x 6035
+≈ 4,179 — the val item was retrieved into the candidate set for exactly that
+fraction of users, a useful cross-check that the pipeline is wired up
+correctly). The full pipeline beats ALS on both metrics (+27% Recall@10,
++29% NDCG@10) despite retrieval alone losing to ALS on Recall@500 — see
+`docs/DECISIONS.md` for why retrieval-only top-10 is actually the *worst*
+of the four (it's optimized for recall within top-500, not precision at
+top-10) and why the two-stage combination still wins.
+
+**Bugs encountered + fixed:**
+1. **`LGBMRanker` failed to import** with
+   `OSError: ... Library not loaded: @rpath/libomp.dylib` the first time
+   `src/ranking/train.py` ran standalone, even though `import lightgbm` had
+   worked earlier in the project. Root cause: the earlier working import was
+   in a line that also imported `torch` first, which happened to load a
+   compatible `libomp.dylib` into the process as a side effect — masking
+   that Homebrew's `libomp` was never actually installed on this machine.
+   `src/ranking/train.py` has no reason to import `torch`, so this surfaced
+   as a hard failure. Fixed properly with `brew install libomp` rather than
+   relying on the incidental torch import order.
+2. **Harmless `UserWarning`**: `LGBMRanker` was fit on a plain numpy array
+   (`table[FEATURE_COLUMNS].values`) but predicted on a pandas DataFrame
+   slice (or vice versa) between `train.py` and `evaluate.py`, and
+   scikit-learn's validation warned about the feature-name mismatch even
+   though the values themselves were correct. Fixed by passing the pandas
+   DataFrame (`table[FEATURE_COLUMNS]`) consistently in both places instead
+   of converting to `.values`; results were bit-for-bit identical before and
+   after, confirming it was purely a warning, not a bug. Also added the
+   `OPENBLAS_NUM_THREADS=1` fix (from Step 5) to `src/ranking/evaluate.py`
+   since it also refits the ALS baseline.
