@@ -351,13 +351,39 @@ and reusing it everywhere.
 
 **Decision:** a user id not seen during training (no train interactions)
 falls back to the global popularity ranking rather than raising an error or
-returning an empty/garbage recommendation.
+returning an empty/garbage recommendation. Implemented in
+`RecommenderPipeline.recommend()` (`src/pipeline.py`): if
+`is_known_user(user_id)` is false, or the known-user retrieval path happens
+to return zero candidates, it falls back to a `PopularityModel` fit on
+train+val, and the API response includes an explicit `is_cold_start: true`
+flag so callers can distinguish a real personalized recommendation from a
+fallback one.
 
 **Alternatives considered:**
 - Return an error / empty list for unknown users. Rejected: unrealistic for a
   demo API meant to be queried with arbitrary user ids, and it's a common,
   simple, real production pattern to fall back to non-personalized popularity
   for genuinely cold users.
+
+## Serving reuses the exact Phase 3 evaluation code, not a reimplementation
+
+**Decision:** `RecommenderPipeline.recommend()` calls the same
+`build_candidate_table()` function from `src/ranking/features.py` that
+`src/ranking/evaluate.py` uses to compute Phase 3's reported test metrics,
+just with a single-user list and no ground-truth labels (`relevant={}`).
+
+**Alternatives considered:**
+- Write a separate, simpler "serving path" that duplicates candidate
+  generation and feature computation for a single user. Rejected: any
+  divergence between the evaluated path and the serving path (a feature
+  computed slightly differently, a different exclusion rule) would mean the
+  offline metrics no longer describe what the API actually returns — a
+  common, hard-to-detect real-world bug class ("training/serving skew").
+  Reusing the identical function guarantees the API's recommendations are
+  produced by the exact same logic that was measured, at the cost of the
+  serving path doing a little more work than a hand-optimized single-user
+  version would (e.g. computing a genre-preference vector for a list of one
+  user via the same vectorized code used for millions of rows).
 
 ---
 
@@ -531,3 +557,34 @@ does — the two aren't directly comparable. The metric that actually matters
 for judging this project is the *relative* one: the full pipeline beats ALS
 by +27% Recall@10 / +29% NDCG@10 under an identical evaluation protocol,
 which is what demonstrates the two-stage architecture adds real value.
+
+**Q: How does the API avoid "training/serving skew" — the recommendations
+it returns actually matching what you evaluated offline?**
+A: `RecommenderPipeline.recommend()` (`src/pipeline.py`) calls the exact
+same `build_candidate_table()` function `src/ranking/evaluate.py` uses to
+compute the Phase 3 test metrics — same feature computation, same
+candidate-exclusion logic, same ranker — just for a single user id with no
+ground-truth label. There's no separate, hand-written "serving path" that
+could quietly drift from the evaluated path over time; if the offline
+metrics describe the pipeline's behavior, the API's live responses are
+produced by that identical code, not an approximation of it.
+
+**Q: Why did you use FastAPI's `lifespan` instead of loading the model
+inside each request handler, or using `@app.on_event("startup")`?**
+A: Loading the two-tower model, building the FAISS index, and loading the
+LightGBM ranker take real time (the full pipeline load is ~1.8s); doing that
+per-request would make every API call unnecessarily slow and wasteful.
+`lifespan` runs that loading exactly once when the server process starts
+and stores the result on `app.state`, so every request just reuses the
+already-loaded pipeline. `@app.on_event("startup")` does the same thing but
+is FastAPI's older, now-deprecated API for it — `lifespan` is the current
+recommended approach.
+
+**Q: What happens if a known user's retrieval step returns zero
+candidates?**
+A: `RecommenderPipeline.recommend()` checks for that (`groups[0] == 0`) and
+falls through to the same popularity-based cold-start path used for unknown
+users, rather than returning an empty recommendation list. In practice this
+only happens if every unseen movie in the catalog is somehow excluded via
+the user's history, which doesn't occur on this dataset, but the guard
+keeps the endpoint's "never return nothing" contract true regardless.

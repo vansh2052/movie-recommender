@@ -254,3 +254,49 @@ top-10) and why the two-stage combination still wins.
    after, confirming it was purely a warning, not a bug. Also added the
    `OPENBLAS_NUM_THREADS=1` fix (from Step 5) to `src/ranking/evaluate.py`
    since it also refits the ALS baseline.
+
+## Phase 4 — Demo API
+
+### Step 9: FastAPI app, Streamlit demo, cold start
+
+`src/pipeline.py` (`RecommenderPipeline`) loads every artifact exactly once
+(parquet files, the two-tower model + FAISS index, the trained ranker, a
+popularity model fit on train+val for cold start) and exposes
+`recommend(user_id, k)` and `get_history(user_id, k)`, reusing the exact
+same `build_candidate_table` from Phase 3 for known users — the API's
+recommendations are produced by the identical code path that was evaluated
+in Phase 3, not a reimplementation. Known-user history/features use
+train+val ("as of now"); an unknown `user_id` falls back to popularity,
+never an error. `src/api/main.py` (FastAPI, lifespan-based startup so the
+pipeline loads once, not per request) exposes `GET /recommend/{user_id}?k=`
+and `GET /user/{user_id}/history?k=`, logging each request's latency via
+`time.perf_counter()`. `app_streamlit.py` calls `RecommenderPipeline`
+directly (no HTTP round-trip) behind `st.cache_resource`, showing history
+next to recommendations side by side.
+
+**How to run:** `make api` (FastAPI on :8000) or `make demo` (Streamlit on
+:8501).
+
+**Results (real manual test run):**
+- Pipeline loads in 1.84s at startup.
+- `GET /recommend/1?k=5` (known user, history = Pocahontas/Hercules/Mulan/
+  Bug's Life/Antz — all Disney animated family films) returned Lion King,
+  Little Mermaid, Charlotte's Web, Pinocchio, Fantasia — genuinely
+  genre-consistent with the user's actual history, a strong qualitative
+  sanity check beyond the offline metrics.
+- `GET /recommend/999999?k=5` (a user id with zero training history)
+  correctly returned `is_cold_start: true` with popularity-based
+  recommendations (American Beauty, Star Wars IV/V, Saving Private Ryan,
+  Raiders of the Lost Ark) instead of an error.
+- `GET /user/999999/history` correctly returned `is_known_user: false` and
+  an empty history list.
+- Per-request latency (logged, not asserted): 490ms on the very first
+  request (cold caches), settling to ~85-125ms on subsequent known-user
+  requests; cold-start and history requests are sub-millisecond (no FAISS/
+  LightGBM work needed).
+- The Streamlit demo was verified in an actual browser: user 1's history
+  and recommendations render side by side as designed. Verifying the
+  cold-start path visually in the browser hit a transient Chrome-extension
+  tooling error unrelated to the app; the same cold-start code path was
+  already confirmed correct via the API test above, since both entry points
+  call the identical `RecommenderPipeline` methods.

@@ -27,10 +27,9 @@ make train-retrieval # train the two-tower retrieval model
 make eval-retrieval  # evaluate retrieval Recall@500 vs baselines
 make train-ranking   # build ranker training data + train LightGBM LambdaRank
 make eval-ranking    # evaluate the full retrieval+ranking pipeline on test
+make api             # serve the FastAPI demo at http://localhost:8000
+make demo            # launch the Streamlit demo at http://localhost:8501
 ```
-
-See `Makefile` for the remaining pipeline stages (API, Streamlit demo) as
-they are added.
 
 ## Phase 1 results (real run on MovieLens 1M)
 
@@ -91,3 +90,34 @@ rather than a small sampled set of negatives (a common simplification in
 published benchmarks that makes their numbers look higher but isn't
 comparable here). See `docs/DECISIONS.md` ("Why the absolute Recall@10 (8%)
 and NDCG@10 (4%) look low") for the full explanation.
+
+## Phase 4: demo API
+
+`src/pipeline.py` loads every trained artifact once (two-tower model +
+FAISS index, LightGBM ranker, a popularity model for cold start) and
+reuses the exact `build_candidate_table()` function from Phase 3's
+evaluation for known users, so the API returns recommendations produced by
+the identical code path that was measured offline — see `docs/DECISIONS.md`
+("Serving reuses the exact Phase 3 evaluation code").
+
+- `GET /recommend/{user_id}?k=10` — ranked titles/genres/scores.
+- `GET /user/{user_id}/history?k=20` — movies the user has liked.
+- Unknown `user_id` → `is_cold_start: true` with popularity-based
+  recommendations, never an error.
+
+Real example: user 1's history is entirely Disney/Pixar animated family
+films (Pocahontas, Hercules, Mulan, A Bug's Life, Antz); `/recommend/1`
+returns Lion King, Little Mermaid, Charlotte's Web, Pinocchio, Fantasia —
+genuinely genre-consistent with that history, a useful qualitative check
+beyond the offline metrics. An unrecognized id like `/recommend/999999`
+correctly falls back to popularity (American Beauty, Star Wars, Saving
+Private Ryan, Raiders of the Lost Ark) with `is_cold_start: true`.
+
+Per-request latency is logged server-side via `time.perf_counter()`: ~85-
+125ms for a known-user recommendation after warmup, sub-millisecond for
+cold-start/history lookups. No Docker, Redis, or cloud deployment — this
+runs entirely as a local process.
+
+`app_streamlit.py` is a small optional UI: pick a user id, see their
+history next to their recommendations side by side, calling
+`RecommenderPipeline` directly rather than going through the API.
