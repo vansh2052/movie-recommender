@@ -44,7 +44,20 @@ def build_item_vocab(movies_df: pd.DataFrame, year_bucket_size: int = 10) -> dic
     }
 
 
-def build_user_vocab(train_df: pd.DataFrame, users_df: pd.DataFrame) -> dict:
+def _compute_user_genre_prefs(train_df: pd.DataFrame, movies_df: pd.DataFrame, ordered_user_ids: list, genre_cols: list) -> np.ndarray:
+    """Per-user genre-preference vector: the mean of the genre multi-hot
+    vectors of every movie the user positively interacted with in train.
+    Each entry is "the fraction of this user's liked movies with that
+    genre" — a real behavioral signal, computed from train only."""
+    merged = train_df[["user_id", "movie_id"]].merge(
+        movies_df[["movie_id"] + genre_cols], on="movie_id", how="left"
+    )
+    genre_mean = merged.groupby("user_id")[genre_cols].mean()
+    matrix = genre_mean.reindex(ordered_user_ids).fillna(0.0).values.astype("float32")
+    return matrix
+
+
+def build_user_vocab(train_df: pd.DataFrame, users_df: pd.DataFrame, movies_df: pd.DataFrame) -> dict:
     """User vocabulary built from TRAIN interactions only: every user who
     can appear in val/test evaluation is guaranteed (by the temporal split)
     to have at least one train interaction, so this covers everyone we'll
@@ -62,13 +75,18 @@ def build_user_vocab(train_df: pd.DataFrame, users_df: pd.DataFrame) -> dict:
     occupation_idx = ordered_users["occupation"].map(occupation_to_idx).values.astype("int64")
     gender_idx = ordered_users["gender"].map(gender_to_idx).values.astype("int64")
 
+    genre_cols = [f"genre_{g}" for g in GENRES]
+    genre_pref_matrix = _compute_user_genre_prefs(train_df, movies_df, user_ids, genre_cols)
+
     return {
         "user_id_to_idx": user_id_to_idx,
         "age_idx": age_idx,
         "occupation_idx": occupation_idx,
         "gender_idx": gender_idx,
+        "genre_pref_matrix": genre_pref_matrix,
         "n_users": len(user_ids),
         "n_ages": len(AGE_VALUES),
         "n_occupations": len(occupations),
         "n_genders": len(GENDER_VALUES),
+        "n_genres": len(genre_cols),
     }

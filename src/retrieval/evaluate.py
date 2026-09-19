@@ -59,7 +59,7 @@ def evaluate_split(user_tower, index, item_vocab, user_vocab, relevant: dict, hi
 def main():
     train, val, test, movies, users = load_splits()
     item_vocab = build_item_vocab(movies, CONFIG["retrieval"]["year_bucket_size"])
-    user_vocab = build_user_vocab(train, users)
+    user_vocab = build_user_vocab(train, users, movies)
 
     user_tower, item_tower, _cfg = load_towers()
     index, _item_emb = build_item_index(item_tower, item_vocab)

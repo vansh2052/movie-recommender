@@ -173,10 +173,10 @@ are normalized).
 ## The two-tower retriever underperforms ALS on Recall@500
 
 **Observation:** on this dataset, the two-tower neural retriever gets test
-Recall@500 = 0.640, below ALS's 0.750 (though above popularity's 0.565). This
-gap didn't close with more training (epochs 15 -> 40 only moved it from
-0.625 -> 0.640, with clearly diminishing returns per epoch — see
-`docs/IMPLEMENTATION_LOG.md`).
+Recall@500 = 0.651 (after the fix below; 0.640 before it), below ALS's 0.750
+(though above popularity's 0.565). More training alone didn't close the gap
+(epochs 15 -> 40 only moved it from 0.625 -> 0.640, with clearly diminishing
+returns per epoch — see `docs/IMPLEMENTATION_LOG.md`).
 
 **Why this is an expected result, not a bug:**
 - **MovieLens 1M is small and dense** (~3,700 items, ~575k positives) —
@@ -199,15 +199,25 @@ gap didn't close with more training (epochs 15 -> 40 only moved it from
   scale, so here it mostly pays the cost (harder optimization) without the
   benefit.
 
-**What we did about it:** doubled the epoch budget (15 -> 40) and confirmed
-diminishing returns rather than a stalled/broken run, kept the honest lower
-number instead of cherry-picking a run, and noted this explicitly rather
-than silently choosing a different metric. We did not do a full
-hyperparameter sweep (embedding dim, learning rate, harder negative mining)
-because the two-stage pipeline's overall quality is decided at Stage 2
-(NDCG@10 after ranking), not by Stage 1 recall in isolation, and a
-recall this level is still enough to hand the ranker (Phase 3) a
-substantially better-than-random-popularity, real-taste-based candidate set.
+**What we did about it:** first doubled the epoch budget (15 -> 40) and
+confirmed diminishing returns rather than a stalled/broken run (0.625 ->
+0.640). Diagnosed the actual gap: `UserTower` only saw `user_id` +
+demographics, no direct signal about what the user actually liked — that
+had to be learned indirectly through the `user_id` embedding via the
+contrastive loss, the same job ALS's per-user factor does but through a
+noisier gradient path. Fixed by feeding `UserTower` each user's real
+**train-only** genre-preference vector (mean of the genre multi-hot vectors
+of the movies they liked in train), through its own projection layer, the
+same pattern `ItemTower` already used for its genre input (see
+`docs/IMPLEMENTATION_LOG.md`, Step 7). That moved test Recall@500 from 0.640
+to 0.651 and NDCG@500 from 0.1031 to 0.1061 — confirming the diagnosis was
+directionally right without closing the gap to ALS. We did not go further
+with a full hyperparameter sweep (embedding dim, learning rate, harder
+negative mining, larger batch size) because the two-stage pipeline's overall
+quality is decided at Stage 2 (NDCG@10 after ranking), not by Stage 1 recall
+in isolation, and this recall level is still enough to hand the ranker
+(Phase 3) a substantially better-than-random-popularity, real-taste-based
+candidate set.
 
 **Trade-off / limitation:** if this were a from-scratch production decision
 rather than a portfolio project demonstrating the two-stage pattern, a
@@ -344,23 +354,26 @@ prevents power users (with hundreds of ratings) from dominating the
 aggregate test metric the way a percentage-based holdout would.
 
 **Q: Your two-tower retrieval model scores lower than ALS on Recall@500
-(0.640 vs 0.750 on test). Why, and why did you keep it instead of just using
+(0.651 vs 0.750 on test). Why, and why did you keep it instead of just using
 ALS for retrieval?**
 A: See "The two-tower retriever underperforms ALS on Recall@500" above — in
 short: MovieLens 1M is small and dense (~3,700 items), which is exactly the
 regime where ALS's closed-form alternating-least-squares fit to the
 interaction matrix is hardest to beat, while the two-tower model splits its
-capacity between an ID embedding and side features that are only weakly
-predictive here, trained with noisier gradient-based updates. Its real
-advantages — embedding brand-new items from metadata alone, and scaling to
-catalogs too large for matrix factorization to serve directly — aren't
-exercised at this scale, so it mostly pays the optimization cost without the
-benefit here. It was kept anyway to demonstrate the two-stage
-retrieval-then-ranking pattern used in production-scale recommenders (the
-actual point of this project), with the trade-off reported honestly rather
-than hidden; in a from-scratch production system at this scale, using ALS
-(or ALS embeddings as a feature into the two-tower model) for retrieval
-would be a defensible alternative.
+capacity between an ID embedding and side features, trained with noisier
+gradient-based updates. Its real advantages — embedding brand-new items from
+metadata alone, and scaling to catalogs too large for matrix factorization
+to serve directly — aren't exercised at this scale, so it mostly pays the
+optimization cost without the benefit here. Feeding the user tower a real
+train-history genre-preference vector (instead of relying purely on the
+learned `user_id` embedding) closed part of the gap (0.640 -> 0.651) but not
+all of it, confirming missing behavioral signal was a real but partial
+cause. It was kept anyway to demonstrate the two-stage retrieval-then-ranking
+pattern used in production-scale recommenders (the actual point of this
+project), with the trade-off reported honestly rather than hidden; in a
+from-scratch production system at this scale, using ALS (or ALS embeddings
+as a feature into the two-tower model) for retrieval would be a defensible
+alternative.
 
 **Q: What did `faiss.omp_set_num_threads(1)` fix, and why was it needed?**
 A: Running PyTorch's own parallel tensor operations and then calling FAISS's

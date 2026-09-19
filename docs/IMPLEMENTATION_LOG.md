@@ -156,3 +156,36 @@ size, not a bug — see `docs/DECISIONS.md` for the full explanation, and
    during `load_state_dict(...)`. Both fixes are isolated to
    `src/retrieval/index.py` since that's the only module that imports both
    libraries in the same process.
+
+### Step 7: Give the user tower real behavioral signal (genre preference)
+
+The retrieval gap vs. ALS above was diagnosed as: `UserTower` only received
+`user_id` + demographics, so it had no direct signal about what the user
+actually liked — everything had to be learned indirectly through the
+`user_id` embedding via the contrastive loss, the same job ALS's per-user
+factor does but through a noisier gradient path. Fixed by computing each
+user's **train-only** genre-preference vector (the mean of the genre
+multi-hot vectors of movies they positively interacted with in train — see
+`_compute_user_genre_prefs` in `src/retrieval/features.py`) and feeding it
+into `UserTower` through its own projection layer, the same pattern already
+used for `ItemTower`'s genre input. Threaded through
+`build_user_vocab`/`train.py`/`index.py`'s `compute_user_embeddings`, and
+the checkpoint's `user_vocab_sizes` now also stores `n_genres`.
+
+**How to run:** same as Step 6 (`make train-retrieval` then
+`make eval-retrieval`) — no new commands, the feature is baked into the
+existing pipeline.
+
+**Results (real run, same 40 epochs as Step 6 for a fair comparison):**
+
+| Model | Split | Recall@500 | NDCG@500 |
+|---|---|---|---|
+| Two-Tower (no genre pref) | test | 0.6404 | 0.1031 |
+| Two-Tower (+ genre pref) | test | 0.6507 | 0.1061 |
+
+A real but modest improvement (+0.0103 Recall@500, +0.0030 NDCG@500),
+confirming the diagnosis was directionally correct without closing the gap
+to ALS (0.7502) — consistent with the dataset-size argument in
+`docs/DECISIONS.md`: even with real behavioral signal, a small feed-forward
+tower trained with noisy contrastive gradients is still working with less
+information per update than ALS's exact alternating least-squares solve.

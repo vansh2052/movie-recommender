@@ -42,10 +42,14 @@ Full table (val + test) in `reports/results.md`. EDA figures in
 |---|---|---|---|---|
 | Popularity | test | 0.5647 | 0.0970 | 0.3544 |
 | ALS | test | 0.7502 | 0.1402 | 0.8290 |
-| Two-Tower Retrieval | test | 0.6404 | 0.1031 | 1.0000 |
+| Two-Tower Retrieval | test | 0.6507 | 0.1061 | 1.0000 |
 
 The two-tower retriever beats popularity but not ALS on Recall@500 here —
 an expected result on a small, dense dataset like MovieLens 1M, not a bug.
 See `docs/DECISIONS.md` ("The two-tower retriever underperforms ALS on
 Recall@500") for the full explanation and what this implies for a
-production system at larger scale.
+production system at larger scale. Feeding the user tower a real
+train-history genre-preference vector (instead of relying solely on the
+learned `user_id` embedding) improved test Recall@500 from 0.6404 to 0.6507
+and NDCG@500 from 0.1031 to 0.1061 — a real but modest gain, confirming the
+user tower's lack of behavioral signal was part of the gap, not all of it.

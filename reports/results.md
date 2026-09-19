@@ -13,5 +13,5 @@
 
 | Model | Split | n_users | Recall@500 | NDCG@500 | Coverage@500 |
 |---|---|---|---|---|---|
-| Two-Tower Retrieval | val | 6035 | 0.6800 | 0.1105 | 1.0000 |
-| Two-Tower Retrieval | test | 6037 | 0.6404 | 0.1031 | 1.0000 |
+| Two-Tower Retrieval | val | 6035 | 0.6925 | 0.1140 | 1.0000 |
+| Two-Tower Retrieval | test | 6037 | 0.6507 | 0.1061 | 1.0000 |

@@ -38,7 +38,7 @@ def load_towers(checkpoint_path: Path = None):
     uv = ckpt["user_vocab_sizes"]
     iv = ckpt["item_vocab_sizes"]
 
-    user_tower = UserTower(uv["n_users"], uv["n_ages"], uv["n_occupations"], uv["n_genders"], cfg)
+    user_tower = UserTower(uv["n_users"], uv["n_ages"], uv["n_occupations"], uv["n_genders"], uv["n_genres"], cfg)
     user_tower.load_state_dict(ckpt["user_tower_state"])
     user_tower.eval()
 
@@ -70,7 +70,8 @@ def compute_user_embeddings(user_tower: UserTower, user_vocab: dict, user_ids: l
         age_t = torch.tensor(user_vocab["age_idx"])[idx_t]
         occ_t = torch.tensor(user_vocab["occupation_idx"])[idx_t]
         gender_t = torch.tensor(user_vocab["gender_idx"])[idx_t]
-        emb = user_tower(idx_t, age_t, occ_t, gender_t)
+        genre_pref_t = torch.tensor(user_vocab["genre_pref_matrix"])[idx_t]
+        emb = user_tower(idx_t, age_t, occ_t, gender_t, genre_pref_t)
         emb = F.normalize(emb, dim=-1).numpy().astype("float32")
     return emb
 

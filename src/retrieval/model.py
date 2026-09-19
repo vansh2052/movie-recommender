@@ -8,28 +8,36 @@ import torch.nn.functional as F
 
 
 class UserTower(nn.Module):
-    def __init__(self, n_users: int, n_ages: int, n_occupations: int, n_genders: int, cfg: dict):
+    """The genre-preference input is not a lookup embedding: it's the
+    user's actual train-history genre-preference vector (see
+    src/retrieval/features.py), giving the tower real behavioral signal
+    about the user's taste instead of relying solely on the user_id
+    embedding to memorize it."""
+
+    def __init__(self, n_users: int, n_ages: int, n_occupations: int, n_genders: int, n_genres: int, cfg: dict):
         super().__init__()
         d = cfg["embedding_dim"]
         self.user_emb = nn.Embedding(n_users, d)
         self.age_emb = nn.Embedding(n_ages, cfg["age_bucket_dim"])
         self.occupation_emb = nn.Embedding(n_occupations, cfg["occupation_dim"])
         self.gender_emb = nn.Embedding(n_genders, cfg["gender_dim"])
+        self.genre_proj = nn.Linear(n_genres, cfg["genre_hidden_dim"])
 
-        input_dim = d + cfg["age_bucket_dim"] + cfg["occupation_dim"] + cfg["gender_dim"]
+        input_dim = d + cfg["age_bucket_dim"] + cfg["occupation_dim"] + cfg["gender_dim"] + cfg["genre_hidden_dim"]
         self.mlp = nn.Sequential(
             nn.Linear(input_dim, cfg["mlp_hidden_dim"]),
             nn.ReLU(),
             nn.Linear(cfg["mlp_hidden_dim"], d),
         )
 
-    def forward(self, user_idx, age_idx, occupation_idx, gender_idx):
+    def forward(self, user_idx, age_idx, occupation_idx, gender_idx, genre_pref):
         x = torch.cat(
             [
                 self.user_emb(user_idx),
                 self.age_emb(age_idx),
                 self.occupation_emb(occupation_idx),
                 self.gender_emb(gender_idx),
+                F.relu(self.genre_proj(genre_pref)),
             ],
             dim=-1,
         )

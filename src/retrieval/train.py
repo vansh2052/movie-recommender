@@ -44,7 +44,7 @@ def train() -> Path:
 
     train_df, movies, users = load_train_data()
     item_vocab = build_item_vocab(movies, cfg["year_bucket_size"])
-    user_vocab = build_user_vocab(train_df, users)
+    user_vocab = build_user_vocab(train_df, users, movies)
 
     dataset = RetrievalDataset(train_df, user_vocab, item_vocab)
     loader = DataLoader(
@@ -55,12 +55,15 @@ def train() -> Path:
         num_workers=cfg["num_workers"],
     )
 
-    user_tower = UserTower(user_vocab["n_users"], user_vocab["n_ages"], user_vocab["n_occupations"], user_vocab["n_genders"], cfg)
+    user_tower = UserTower(
+        user_vocab["n_users"], user_vocab["n_ages"], user_vocab["n_occupations"], user_vocab["n_genders"], user_vocab["n_genres"], cfg
+    )
     item_tower = ItemTower(item_vocab["n_items"], item_vocab["n_genres"], item_vocab["n_year_buckets"], cfg)
 
     user_age_t = torch.tensor(user_vocab["age_idx"])
     user_occ_t = torch.tensor(user_vocab["occupation_idx"])
     user_gender_t = torch.tensor(user_vocab["gender_idx"])
+    user_genre_pref_t = torch.tensor(user_vocab["genre_pref_matrix"])
     item_genre_t = torch.tensor(item_vocab["genre_matrix"])
     item_year_t = torch.tensor(item_vocab["year_bucket"])
 
@@ -78,7 +81,9 @@ def train() -> Path:
             user_idx = user_idx.long()
             item_idx = item_idx.long()
 
-            user_emb = user_tower(user_idx, user_age_t[user_idx], user_occ_t[user_idx], user_gender_t[user_idx])
+            user_emb = user_tower(
+                user_idx, user_age_t[user_idx], user_occ_t[user_idx], user_gender_t[user_idx], user_genre_pref_t[user_idx]
+            )
             item_emb = item_tower(item_idx, item_genre_t[item_idx], item_year_t[item_idx])
 
             user_emb = F.normalize(user_emb, dim=-1)
@@ -108,6 +113,7 @@ def train() -> Path:
                 "n_ages": user_vocab["n_ages"],
                 "n_occupations": user_vocab["n_occupations"],
                 "n_genders": user_vocab["n_genders"],
+                "n_genres": user_vocab["n_genres"],
             },
             "item_vocab_sizes": {
                 "n_items": item_vocab["n_items"],
