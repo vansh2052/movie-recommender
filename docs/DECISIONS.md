@@ -170,6 +170,53 @@ are normalized).
   exact search over 3,700 items is already sub-millisecond, so approximate
   search would only add complexity (nprobe tuning) with no speed benefit.
 
+## The two-tower retriever underperforms ALS on Recall@500
+
+**Observation:** on this dataset, the two-tower neural retriever gets test
+Recall@500 = 0.640, below ALS's 0.750 (though above popularity's 0.565). This
+gap didn't close with more training (epochs 15 -> 40 only moved it from
+0.625 -> 0.640, with clearly diminishing returns per epoch — see
+`docs/IMPLEMENTATION_LOG.md`).
+
+**Why this is an expected result, not a bug:**
+- **MovieLens 1M is small and dense** (~3,700 items, ~575k positives) —
+  exactly the regime where a pure matrix-factorization model like ALS is
+  hardest to beat. ALS dedicates its entire parameter budget to a per-user
+  and per-item latent vector directly fit to the interaction matrix via
+  alternating closed-form least-squares solves — a very sample-efficient,
+  well-posed optimization for small dense implicit-feedback matrices.
+- **The two-tower model splits its capacity** between an ID embedding (doing
+  the same job as ALS's factors) and side features (age, occupation, gender,
+  genres, year) that are only weakly predictive on their own, and it's
+  trained with noisier, gradient-based in-batch softmax updates rather than
+  ALS's exact alternating solves — a less sample-efficient training signal
+  for a dataset this small.
+- **The two-tower architecture's real advantages don't show up at this
+  scale**: it can embed a brand-new item from its metadata alone (genre,
+  year) without any interaction history, and it scales to catalogs far too
+  large for exact or even approximate matrix factorization to serve directly
+  — neither of those advantages is exercised at MovieLens-1M's ~3,700-item
+  scale, so here it mostly pays the cost (harder optimization) without the
+  benefit.
+
+**What we did about it:** doubled the epoch budget (15 -> 40) and confirmed
+diminishing returns rather than a stalled/broken run, kept the honest lower
+number instead of cherry-picking a run, and noted this explicitly rather
+than silently choosing a different metric. We did not do a full
+hyperparameter sweep (embedding dim, learning rate, harder negative mining)
+because the two-stage pipeline's overall quality is decided at Stage 2
+(NDCG@10 after ranking), not by Stage 1 recall in isolation, and a
+recall this level is still enough to hand the ranker (Phase 3) a
+substantially better-than-random-popularity, real-taste-based candidate set.
+
+**Trade-off / limitation:** if this were a from-scratch production decision
+rather than a portfolio project demonstrating the two-stage pattern, a
+strong case exists for using ALS (or a hybrid: ALS embeddings as an
+additional input feature to the two-tower model) as the retrieval stage
+instead, at least until the catalog grows large enough or cold-start
+coverage becomes the binding constraint. This is called out again in
+`README.md`'s Limitations & Future Work.
+
 ## LambdaRank instead of binary classification for the ranker
 
 **Decision:** train the LightGBM ranker with `objective="lambdarank"`,
@@ -295,3 +342,35 @@ small users while maximizing what's left for `train`; it directly matches
 the "predict the next positive interaction" problem statement; and it
 prevents power users (with hundreds of ratings) from dominating the
 aggregate test metric the way a percentage-based holdout would.
+
+**Q: Your two-tower retrieval model scores lower than ALS on Recall@500
+(0.640 vs 0.750 on test). Why, and why did you keep it instead of just using
+ALS for retrieval?**
+A: See "The two-tower retriever underperforms ALS on Recall@500" above — in
+short: MovieLens 1M is small and dense (~3,700 items), which is exactly the
+regime where ALS's closed-form alternating-least-squares fit to the
+interaction matrix is hardest to beat, while the two-tower model splits its
+capacity between an ID embedding and side features that are only weakly
+predictive here, trained with noisier gradient-based updates. Its real
+advantages — embedding brand-new items from metadata alone, and scaling to
+catalogs too large for matrix factorization to serve directly — aren't
+exercised at this scale, so it mostly pays the optimization cost without the
+benefit here. It was kept anyway to demonstrate the two-stage
+retrieval-then-ranking pattern used in production-scale recommenders (the
+actual point of this project), with the trade-off reported honestly rather
+than hidden; in a from-scratch production system at this scale, using ALS
+(or ALS embeddings as a feature into the two-tower model) for retrieval
+would be a defensible alternative.
+
+**Q: What did `faiss.omp_set_num_threads(1)` fix, and why was it needed?**
+A: Running PyTorch's own parallel tensor operations and then calling FAISS's
+OpenMP-parallel `index.search(...)` in the same process caused a hard
+segfault on this machine (macOS, pip-installed `faiss-cpu` + `torch`, both
+of which bundle their own OpenMP runtime). Restricting FAISS to a single
+thread avoids the collision; since the catalog is only ~3,700 items, exact
+single-threaded search has no meaningful speed cost. A separate, milder
+symptom of the same root cause (`OMP: Error #15`, a duplicate-runtime abort)
+was fixed with the standard `KMP_DUPLICATE_LIB_OK=TRUE` workaround, and
+import order (`torch` before `faiss`) mattered for a third variant of the
+same underlying issue. All three fixes live together in
+`src/retrieval/index.py`, the one module that imports both libraries.

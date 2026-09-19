@@ -35,3 +35,17 @@ movies, split per-user by timestamp (see `docs/DECISIONS.md`).
 
 Full table (val + test) in `reports/results.md`. EDA figures in
 `reports/figures/`.
+
+## Phase 2 results (two-tower retrieval + FAISS)
+
+| Model | Split | Recall@500 | NDCG@500 | Coverage@500 |
+|---|---|---|---|---|
+| Popularity | test | 0.5647 | 0.0970 | 0.3544 |
+| ALS | test | 0.7502 | 0.1402 | 0.8290 |
+| Two-Tower Retrieval | test | 0.6404 | 0.1031 | 1.0000 |
+
+The two-tower retriever beats popularity but not ALS on Recall@500 here —
+an expected result on a small, dense dataset like MovieLens 1M, not a bug.
+See `docs/DECISIONS.md` ("The two-tower retriever underperforms ALS on
+Recall@500") for the full explanation and what this implies for a
+production system at larger scale.

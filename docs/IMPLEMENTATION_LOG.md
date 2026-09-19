@@ -99,3 +99,60 @@ set before numpy/scipy/implicit are imported, since OpenBLAS reads it at
 library load time) and, defensively, wrapping the `model.fit(...)` call in
 `threadpoolctl.threadpool_limits(1, "blas")` inside `ALSBaseline.fit` for
 any other entry point that constructs this class.
+
+## Phase 2 — Retrieval (two-tower + FAISS)
+
+### Step 6: Two-tower model, training, FAISS index, evaluation
+
+`src/retrieval/features.py` builds deterministic vocabularies/feature arrays
+for users (id, age-bucket, occupation, gender) and the full item catalog (id,
+18-dim multi-hot genre vector, release-year bucketed into 10-year buckets).
+`src/retrieval/model.py` defines `UserTower` and `ItemTower` (each:
+embeddings -> concat -> 2-layer MLP -> shared-dimension output).
+`src/retrieval/train.py` trains on **train-split positives only** with
+in-batch softmax negatives (full batch similarity matrix, cross-entropy with
+the diagonal as the positive, temperature 0.05). `src/retrieval/index.py`
+embeds the full catalog, builds a FAISS `IndexFlatIP` (cosine, since vectors
+are L2-normalized), and retrieves top-k candidates per user, excluding a
+caller-supplied history set. `src/retrieval/evaluate.py` reports Recall@500/
+NDCG@500/coverage@500 on val and test into `reports/results.md`.
+
+**How to run:** `make train-retrieval` then `make eval-retrieval`.
+
+**Results (real run on ml-1m, see `reports/results.md`):**
+
+| Model | Split | Recall@500 | NDCG@500 | Coverage@500 |
+|---|---|---|---|---|
+| Popularity | test | 0.5647 | 0.0970 | 0.3544 |
+| ALS | test | 0.7502 | 0.1402 | 0.8290 |
+| Two-Tower Retrieval | test | 0.6404 | 0.1031 | 1.0000 |
+
+The two-tower retriever beats the popularity baseline (0.640 vs 0.565) but
+does **not** beat ALS (0.640 vs 0.750) on Recall@500, despite tuning epochs
+(15 -> 40; loss dropped from 5.43 -> 4.67 but with clearly diminishing
+returns per epoch, and Recall@500 only moved 0.625 -> 0.640 for ~2.7x more
+training time). It does reach 100% catalog coverage, vs. ALS's 83% and
+popularity's 35% — it's willing to recommend the entire catalog rather than
+concentrating on a subset. This is a real, expected result for this dataset
+size, not a bug — see `docs/DECISIONS.md` for the full explanation, and
+`README.md`/Limitations for what it implies about the project.
+
+**Bugs encountered + fixed (both are the well-known macOS `faiss` +
+`torch` co-installation problems, not application logic bugs):**
+1. **`OMP: Error #15`** on first `import faiss` after `import torch`: both
+   packages' pip wheels bundle their own `libomp.dylib`, and loading both in
+   one process aborts by default. Fixed with the standard workaround,
+   `os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"`, set at the very top of
+   `src/retrieval/index.py` before either library is imported.
+2. **Hard segfault** the first time `faiss.Index.search(...)` ran after
+   torch had already done real tensor computation (embedding lookups + MLP
+   forward) in the same process — the OMP workaround above silences the
+   *abort* but not this crash, because it's a genuine thread-pool collision
+   between torch's parallel ops and FAISS's own OpenMP-parallel search, not
+   just a duplicate-symbol warning. Fixed with `faiss.omp_set_num_threads(1)`
+   right after import — with a ~3,700-item catalog, single-threaded exact
+   search has no measurable speed cost. Also reordered the module's imports
+   to `torch` before `faiss`, which independently avoided an earlier segfault
+   during `load_state_dict(...)`. Both fixes are isolated to
+   `src/retrieval/index.py` since that's the only module that imports both
+   libraries in the same process.

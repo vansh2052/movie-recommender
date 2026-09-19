@@ -21,7 +21,7 @@ from src.config import CONFIG
 from src.baselines.popularity import PopularityModel
 from src.baselines.als import ALSBaseline
 from src.eval.metrics import mean_at_k, recall_at_k, ndcg_at_k, catalog_coverage
-from src.eval.report import update_section
+from src.eval.report import update_section, format_metrics_table
 
 np.random.seed(CONFIG["seed"])
 
@@ -67,18 +67,6 @@ def evaluate_model(recommend_fn, relevant: dict, history: dict, ks: list, catalo
     return results
 
 
-def format_results_table(rows: list, ks: list) -> str:
-    cols = ["Model", "Split", "n_users"] + [f"Recall@{k}" for k in ks] + [f"NDCG@{k}" for k in ks] + [f"Coverage@{max(ks)}"]
-    lines = ["| " + " | ".join(cols) + " |", "|" + "---|" * len(cols)]
-    for name, split_name, res in rows:
-        cells = [name, split_name, str(res["n_users_evaluated"])]
-        cells += [f"{res[f'recall@{k}']:.4f}" for k in ks]
-        cells += [f"{res[f'ndcg@{k}']:.4f}" for k in ks]
-        cells += [f"{res[f'coverage@{max(ks)}']:.4f}"]
-        lines.append("| " + " | ".join(cells) + " |")
-    return "\n".join(lines)
-
-
 def main():
     train, val, test, movies = load_splits()
     catalog_size = movies["movie_id"].nunique()
@@ -113,7 +101,7 @@ def main():
         print(f"{name} | val  | {val_res}")
         print(f"{name} | test | {test_res}")
 
-    table = format_results_table(rows, ks)
+    table = format_metrics_table(rows, ks)
     results_path = Path(CONFIG["paths"]["reports_dir"]) / "results.md"
     update_section(results_path, "Phase 1: Baselines", table)
     print(f"Wrote results table to {results_path}")

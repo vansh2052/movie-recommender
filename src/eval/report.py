@@ -5,6 +5,27 @@ without clobbering sections written by other phases."""
 from pathlib import Path
 
 
+def format_metrics_table(rows: list, ks: list) -> str:
+    """rows: list of (model_name, split_name, results_dict) where
+    results_dict has 'recall@{k}'/'ndcg@{k}' for each k in ks, plus
+    'coverage@{max(ks)}' and 'n_users_evaluated'."""
+    max_k = max(ks)
+    cols = (
+        ["Model", "Split", "n_users"]
+        + [f"Recall@{k}" for k in ks]
+        + [f"NDCG@{k}" for k in ks]
+        + [f"Coverage@{max_k}"]
+    )
+    lines = ["| " + " | ".join(cols) + " |", "|" + "---|" * len(cols)]
+    for name, split_name, res in rows:
+        cells = [name, split_name, str(res["n_users_evaluated"])]
+        cells += [f"{res[f'recall@{k}']:.4f}" for k in ks]
+        cells += [f"{res[f'ndcg@{k}']:.4f}" for k in ks]
+        cells += [f"{res[f'coverage@{max_k}']:.4f}"]
+        lines.append("| " + " | ".join(cells) + " |")
+    return "\n".join(lines)
+
+
 def update_section(path: Path, title: str, body_md: str) -> None:
     path = Path(path)
     heading = f"## {title}"
