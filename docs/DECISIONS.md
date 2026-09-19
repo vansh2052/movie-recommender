@@ -95,6 +95,31 @@ users rather than over independent random draws — variance is higher than a
 larger random test set would give, and users with very few positives (1-2)
 contribute no val, or no val/test at all.
 
+**Why hold out exactly one item per split (leave-one-out), not a percentage
+(e.g. "last 20% of each user's interactions"):**
+- **Users don't have much history to spare.** MovieLens 1M only guarantees
+  users have >=20 *ratings* total, and after filtering to positives
+  (rating >= 4) many users have well under that. A percentage-based holdout
+  would need special-casing for small users anyway (rounding to 0), while a
+  fixed count of 1 works uniformly and leaves the maximum possible history in
+  `train`, which matters most since `train` is what the retrieval model, ALS,
+  and every ranker feature are built from.
+- **It matches the actual problem statement.** The task is "given a user's
+  past interactions, predict what they'll like next," not "given a random
+  slice of their history, fill in a random missing chunk." Holding out just
+  the single most recent positive is the direct instantiation of "next
+  positive interaction."
+- **It keeps the aggregate metric from being dominated by power users.** A
+  percentage-based holdout gives a 500-rating user ~100 test examples and a
+  5-rating user ~1, so the aggregate Recall@K/NDCG@K would mostly reflect
+  performance for the most active users. With exactly one held-out item per
+  user, every user — casual or heavy — contributes equally to the average.
+
+This is the classic "leave-one-out" evaluation protocol widely used in
+implicit-feedback recommendation research (e.g. He et al., *Neural
+Collaborative Filtering*, 2017), applied here as leave-two-out (one for val,
+one for test).
+
 ## Two-stage architecture (retrieval then ranking) instead of one model
 
 **Decision:** a lightweight retrieval model narrows ~3,700 movies to ~500
@@ -196,6 +221,77 @@ returning an empty/garbage recommendation.
 
 ## Interview Questions
 
-*(Filled in during Phase 5 with 25-30 questions and grounded answers covering
-the problem, data, retrieval, ranking, evaluation, leakage, cold start,
-scaling, and limitations.)*
+Populated incrementally as questions come up while building the project
+(each one grounded in an actual question asked and answered during
+development); expanded to the full 25-30 question set covering retrieval,
+ranking, scaling, and limitations in Phase 5.
+
+**Q: `config.yaml` has both `data.positive_rating_threshold: 4` and
+`split.min_positives_for_val: 3`. Doesn't that contradict "rating >= 4 is
+positive"?**
+A: No — they're unrelated thresholds applied to different things.
+`positive_rating_threshold` filters the 1-5 star `rating` column to decide
+what counts as a positive interaction at all (used once, in
+`make_implicit()`). `min_positives_for_val` never looks at the rating value;
+it counts *how many positive interactions a user already has* (after that
+filtering) to decide whether their history is long enough to also carve out
+a validation example, inside `temporal_split()`. By the time the split logic
+runs, the rating column has already done its only job.
+
+**Q: What's the difference between the Popularity baseline and ALS?**
+A: Popularity is non-personalized — it ranks movies by how many positive
+interactions they received in training and recommends the same ranked list
+to everyone (minus what they've already seen). ALS (Alternating Least
+Squares) is personalized matrix factorization: it learns a low-dimensional
+embedding for every user and every movie such that their dot product
+approximates affinity, alternating between solving for user embeddings
+(item embeddings fixed) and item embeddings (user embeddings fixed) until
+convergence. Because it learns per-user vectors, it can rank differently
+for different users, which is why it beats popularity on every metric in
+our results (test Recall@10 0.065 vs. 0.039 — see `reports/results.md`).
+
+**Q: What do Recall@K and NDCG@K measure, and why use Recall@K for
+retrieval but NDCG@K for ranking?**
+A: Recall@K = (relevant items found in the top-K) / (total relevant items)
+— it only asks whether the relevant items were found, not where. NDCG@K
+additionally discounts hits by position (`1/log2(rank+1)`) and normalizes
+against the best possible ordering, so it rewards ranking relevant items
+higher. Stage 1 (retrieval) only needs to narrow ~3,700 movies down to the
+right ~500 candidates — order doesn't matter yet, so it's optimized for
+Recall@500. Stage 2 (ranking) determines the actual order the user sees in
+the final top-10, which is exactly what NDCG@10 measures, so that's the
+ranker's objective.
+
+**Q: Why train only on positive interactions instead of also using ratings
+1-3 as explicit negative labels?**
+A: See the "Training only on positive interactions" decision above — in
+short: this is deliberately an implicit-feedback problem (matching what
+production recommenders actually observe), a low rating still represents
+real engagement rather than absence of interest (so it isn't equivalent to
+"never watched"), and which movies a user chooses to watch and rate poorly
+is itself a biased sample that could unfairly penalize widely-watched
+mainstream movies. Negatives are instead generated implicitly per model:
+ALS's confidence weighting, the two-tower model's in-batch negatives, and
+the ranker's 0-labeled non-target candidates.
+
+**Q: With exactly one relevant item per user, what does Recall@K actually
+measure?**
+A: It collapses to a binary hit/miss for that user: since
+`|relevant items| = 1`, the numerator (relevant items found in top-K) can
+only be 0 or 1, so `recall_at_k` is exactly 1.0 if the held-out movie is in
+the top-K and 0.0 otherwise — no partial credit is possible. Averaging that
+0/1 value across all evaluated users is the same as computing the fraction
+of users whose held-out movie was successfully surfaced — i.e., with a
+single held-out item per user, Recall@K and Hit Rate@K are mathematically
+identical. NDCG@K does not collapse the same way, because it still credits
+*where* in the top-K the hit landed.
+
+**Q: Why hold out only one interaction per user for val/test instead of a
+percentage-based split (e.g. last 20% of each user's history)?**
+A: See "Why hold out exactly one item per split" under the temporal-split
+decision above — in short: MovieLens users often don't have much positive
+history to spare, so a fixed count of 1 avoids needing special-casing for
+small users while maximizing what's left for `train`; it directly matches
+the "predict the next positive interaction" problem statement; and it
+prevents power users (with hundreds of ratings) from dominating the
+aggregate test metric the way a percentage-based holdout would.
