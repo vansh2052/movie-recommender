@@ -300,3 +300,31 @@ next to recommendations side by side.
   tooling error unrelated to the app; the same cold-start code path was
   already confirmed correct via the API test above, since both entry points
   call the identical `RecommenderPipeline` methods.
+
+## Phase 5 — Documentation
+
+### Step 10: Reproducibility check, dependency pinning, final README
+
+Pinned `requirements.txt` to the exact versions installed in this project's
+`.venv` (via `pip freeze`), rather than the loose `>=` ranges used during
+development, for full reproducibility. Re-ran the **entire pipeline from a
+clean invocation** of `make all` (download-data through eval-ranking) as a
+final end-to-end check.
+
+**Result: every number reproduced bit-for-bit identical** to the numbers
+already recorded in `reports/results.md` across all three phases —
+including the two-tower training loss curve matching to 4 decimal places
+epoch-by-epoch (e.g. final epoch 40 loss = 4.5890 in both runs). This
+confirms the fixed seed (`config.yaml -> seed: 42`, applied via
+`set_seed()` in both `src/retrieval/train.py` and `src/ranking/train.py`)
+genuinely makes the pipeline reproducible end to end, not just "probably
+similar." Rewrote `README.md` as a single coherent document (problem
+statement, mermaid architecture diagram, dataset description, consolidated
+results tables, Limitations & Future Work) instead of the phase-by-phase
+appended sections used while building — the appended history itself lives
+on unedited in this log and in `docs/DECISIONS.md`. Expanded
+`docs/DECISIONS.md`'s Interview Questions section to 29 entries covering
+the problem, data, retrieval, ranking, evaluation, leakage, cold start,
+scaling, and limitations, per the original project brief's 25-30 target.
+
+**How to run:** `make all`.

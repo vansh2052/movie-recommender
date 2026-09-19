@@ -1,3 +1,5 @@
+"""Pydantic response models for the FastAPI demo (src/api/main.py)."""
+
 from typing import List, Optional
 
 from pydantic import BaseModel

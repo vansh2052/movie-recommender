@@ -588,3 +588,160 @@ users, rather than returning an empty recommendation list. In practice this
 only happens if every unseen movie in the catalog is somehow excluded via
 the user's history, which doesn't occur on this dataset, but the guard
 keeps the endpoint's "never return nothing" contract true regardless.
+
+**Q: Why rating >= 4 specifically, and not >= 3 or only 5-star ratings?**
+A: It's a judgment call balancing two failure modes: too low a threshold
+(e.g. >= 3) would count "it was okay" as a genuine positive signal, diluting
+the training data with weak preferences; too high (only 5) would throw away
+a large fraction of real positive signal and shrink an already-modest
+dataset further. Rating >= 4 out of 5 is the conventional choice on
+MovieLens in the recommendation literature and matches "the user actively
+liked this," which is what the project is trying to predict. It's exposed
+as `config.yaml -> data.positive_rating_threshold` specifically so it's not
+a buried magic number.
+
+**Q: Why two stages (retrieval then ranking) instead of a single model
+scoring every movie for every user directly?**
+A: At MovieLens-1M's ~3,700-item scale, scoring every item directly would
+actually be computationally fine — the two-stage split is here specifically
+to demonstrate the pattern real large-scale recommenders (YouTube,
+Pinterest, etc.) use out of necessity: a catalog of millions of items makes
+scoring every item with an expensive model infeasible per request, so a
+cheap, high-recall retrieval step narrows the field first, and only the
+survivors get the expensive, precise ranking treatment. See "Two-stage
+architecture" in this document for the full comparison.
+
+**Q: Why in-batch negatives for the two-tower model instead of explicit
+negative sampling?**
+A: In-batch negatives (every other item in the training batch acts as a
+negative for a given user) require no extra sampling logic or
+negatives-per-positive hyperparameter, are the standard technique for
+two-tower retrieval training, and automatically get "harder" as batch size
+grows since more of the catalog is represented per step. The trade-off is
+that batch composition determines the effective negative distribution
+(popular items appear as negatives more often), which is actually desirable
+here — it teaches the model to distinguish genuine taste from generic
+popularity rather than making that a separate concern.
+
+**Q: Why use FAISS at all, if a NumPy matrix multiply would be fast enough
+for ~3,700 items?**
+A: It would be fast enough at this scale — FAISS is used specifically to
+demonstrate the vector-search pattern used at production scale (millions of
+items, where brute-force search is not viable and approximate nearest
+neighbor search becomes necessary). Using `IndexFlatIP` (exact search) here
+rather than an approximate index (IVF/HNSW) is itself a deliberate choice:
+approximate search would add tuning complexity (e.g. `nprobe`) with no
+speed benefit at this catalog size.
+
+**Q: Why LambdaRank instead of a binary classifier for the ranker?**
+A: A binary classifier (relevant vs. not) optimizes for calibrated
+probability of relevance, not for the *ordering* of items within a user's
+candidate list — but ordering within the top 10 is exactly what NDCG@10
+measures and what a user actually experiences. LambdaRank directly
+optimizes a smooth approximation of NDCG's rank-swap gradient, which is a
+better match for the actual objective, at the cost of its output scores
+being useful only for sorting within a group, not as calibrated
+probabilities.
+
+**Q: Concretely, how is leakage prevented in the ranker's features?**
+A: Every user/item statistic (activity count, average rating, genre
+preference, popularity) is computed "as of" the split being predicted, via
+an explicit `history_for_features` argument threaded through
+`build_candidate_table()` (`src/ranking/features.py`) — never a global
+statistic computed once and reused everywhere. Concretely: predicting a
+user's **val** item uses **train-only** history for every feature (and for
+candidate exclusion); predicting **test** uses **train + val** (val has,
+chronologically, already happened by the time test is being predicted).
+There's no code path that computes a statistic from the full dataset and
+reuses it regardless of which split is being scored.
+
+**Q: Your retrieval/ranking handle a *new user* by falling back to
+popularity — how would you handle a brand-new *movie* that has no
+interaction history yet?**
+A: Better than a new user, but not fully solved either. `ItemTower` embeds
+a movie from its `movie_id` embedding *plus* its genre vector and release
+year — a new movie would still need a slot in the fixed-size `item_id`
+embedding table (same limitation as new users), but its genre/year features
+would immediately be meaningful even with an untrained, effectively random
+`item_id` sub-vector, giving a much better starting point than a new user
+gets (who has no equivalent content signal built into `UserTower` beyond
+demographics). The ranker's item features (popularity, avg rating) would
+default to 0/global-average for an item with zero interactions, same
+mechanism already used for any item unseen in a given `history_for_features`
+window (see `compute_item_stats_arrays`'s `fillna` behavior).
+
+**Q: Why LightGBM specifically, rather than XGBoost or CatBoost, for the
+ranker?**
+A: All three implement gradient-boosted trees with a LambdaRank/LambdaMART
+objective and would likely perform similarly here. LightGBM was chosen for
+its native `LGBMRanker` scikit-learn-style API (clean `fit(X, y,
+group=groups)` interface for grouped ranking), fast CPU training via
+histogram-based splitting (relevant for the "runs on a laptop CPU in
+reasonable time" requirement), and it being the most commonly used of the
+three specifically for ranking tasks in industry and in Kaggle-style
+learning-to-rank competitions.
+
+**Q: How would you scale this system to a catalog of millions of items?**
+A: Three main changes: (1) swap the exact FAISS `IndexFlatIP` for an
+approximate index (IVF or HNSW) to keep retrieval sub-linear; (2) move from
+a one-shot training script to a scheduled retraining pipeline, since a
+catalog and user base that large changes continuously and periodic
+retraining (with the cold-start bridges discussed above) becomes necessary
+rather than optional; (3) serve the FAISS index and model artifacts behind
+a proper model-serving layer with caching, rather than loading everything
+into one Python process — the current single-process `RecommenderPipeline`
+is appropriate for a laptop demo, not for production request volume.
+
+**Q: How would you know in production when this model needs retraining?**
+A: Monitor for **feature/embedding drift** (e.g. the distribution of
+retrieval similarity scores or ranker feature values shifting over time),
+**declining online metrics** (click-through or watch-through rate on served
+recommendations trending down), and a **growing cold-start rate** (rising
+fraction of requests hitting the popularity fallback as more genuinely new
+users/items accumulate since the last training run) — any of which would
+trigger a retrain rather than waiting on a fixed calendar schedule alone.
+
+**Q: The offline metrics here are Recall@K/NDCG@K. How do those relate to
+real online business metrics?**
+A: They're a proxy, not the actual goal. Recall@K/NDCG@K measure how well
+the model reconstructs a *known* historical interaction from past data;
+real deployment cares about **incremental** business outcomes — click-through
+rate, watch-through/completion rate, session length, or retention — on
+recommendations the model hasn't seen the outcome of yet. A model can
+improve offline NDCG while making no difference (or even harming) a real
+business metric, which is why production systems pair offline evaluation
+like this with online A/B testing before fully shipping a model change.
+
+**Q: The ranker trains on ~3 million candidate rows but only ~4,179 are
+positive. How do you know it isn't just overfitting to that imbalance?**
+A: Class imbalance is expected and handled by construction here, not a
+symptom of a bug: LambdaRank's objective is inherently about *relative*
+ordering within each user's ~500-candidate group, not a global
+positive-rate calibration, so a group with 1 positive out of 500 negatives
+contributes a well-defined gradient regardless of the global imbalance
+ratio. The real generalization check is the **held-out test evaluation**
+(Step 3 in `src/ranking/evaluate.py`), which uses a completely different
+set of candidates and labels (train+val history, test-split targets) than
+what the model was trained on — the fact that the full pipeline beats every
+baseline there, not just on the training data, is the actual evidence
+against overfitting, not any property of the training set's balance.
+
+**Q: Why normalize the user/item embeddings before taking their dot
+product in the two-tower model?**
+A: Normalizing both to unit length turns the raw dot product into cosine
+similarity, which measures the *angle* between vectors (how aligned two
+tastes/items are) independent of their magnitude. Without normalization, the
+model could trivially inflate similarity scores simply by learning larger
+embedding norms for popular items/active users, rather than actually
+learning more meaningful directions in the embedding space — cosine
+similarity removes that degree of freedom and is the standard choice for
+retrieval embeddings.
+
+**Q: If you had to pick one thing to improve next, what would it be?**
+A: Feeding the user tower real interaction-history signal, not just
+demographics + a static genre-preference vector — e.g. a sequence-aware
+encoder over the user's actual liked-item embeddings (rather than a single
+mean-pooled genre vector), which is the natural next step beyond the
+genre-preference fix already applied in Phase 2 and would likely close more
+of the remaining Recall@500 gap to ALS than any further hyperparameter
+tuning would.
