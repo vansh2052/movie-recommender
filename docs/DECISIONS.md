@@ -27,6 +27,50 @@ interaction; everything else (rating 1-3, or no rating at all) is treated as
 as positive, and the threshold is a hyperparameter (`config.yaml ->
 data.positive_rating_threshold`) rather than a principled cutoff.
 
+## Training only on positive interactions (not using low ratings as explicit negatives)
+
+**Decision:** every model in this project (ALS, the two-tower retriever, the
+LightGBM ranker) is trained as an implicit-feedback problem — the only label
+that exists is "positive" (rating >= 4). Ratings of 1-3 are never used to
+construct an explicit "the user dislikes this" training label; negatives are
+instead generated implicitly and automatically by each model:
+- **ALS** treats every *unobserved* (user, movie) pair as a low-confidence
+  negative and every *positive* pair as high-confidence, per the standard
+  implicit-feedback matrix factorization formulation (Hu, Koren & Volinsky,
+  2008) — this is exactly the setting `implicit`'s ALS is built for.
+- **The two-tower retriever** uses in-batch negatives: only positive (user,
+  item) pairs are fed in, and every other item in the same training batch
+  becomes an implicit negative for that user via the softmax denominator.
+- **The LightGBM ranker** labels exactly one candidate 1 (the item the user
+  actually interacted with next) per group, and the rest 0 — again, no
+  rating value below 4 is ever consulted.
+
+**Alternatives considered:**
+- Use ratings 1-3 as explicit negative labels (e.g. hard negatives for the
+  retriever, or a richer 3-class label for the ranker). Rejected for three
+  reasons:
+  1. **Realism** — this is deliberately an implicit-feedback problem (one of
+     the project's original requirements), because that's what production
+     recommenders actually observe: clicks, watches, purchases, never a
+     clean "the user dislikes this." Pulling in explicit low ratings would
+     make this an easier, less representative problem than the one the
+     project is meant to demonstrate.
+  2. **A low rating is still engagement, not absence** — a user who watched a
+     movie and rated it 2 stars invested more attention in it than a user who
+     never watched it at all. Treating "watched and disliked" as equal to or
+     worse than "never watched" conflates two different signals.
+  3. **Selection bias** — which movies a user chooses to watch (and
+     sometimes rates low) is itself non-random. Using those low ratings as
+     hard negatives risks penalizing widely-watched mainstream movies simply
+     because they attract more 2-3 star ratings from a broad audience, not
+     because they are poor recommendations for other users.
+
+**Trade-off:** the model never receives a true "actively disliked" signal,
+only "positive" vs. "unknown" — so it cannot distinguish a movie a user would
+dislike from one they simply haven't encountered yet. Mining ratings 1-3 as
+hard negatives (rather than random/in-batch negatives) for the retrieval
+stage is a reasonable future extension, noted in Limitations & Future Work.
+
 ## Temporal split, not random
 
 **Decision:** for each user, order their positive interactions by timestamp
