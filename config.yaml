@@ -1,0 +1,52 @@
+seed: 42
+
+paths:
+  raw_dir: data/raw
+  processed_dir: data/processed
+  models_dir: models
+  reports_dir: reports
+  figures_dir: reports/figures
+  ml1m_url: "https://files.grouplens.org/datasets/movielens/ml-1m.zip"
+
+data:
+  positive_rating_threshold: 4
+  separator: "::"
+  encoding: "latin-1"
+
+split:
+  # per-user temporal split; see docs/DECISIONS.md
+  min_positives_for_val: 3
+  min_positives_for_test: 2
+
+eval:
+  ks: [10, 500]
+  primary_k: 10
+  retrieval_k: 500
+
+als:
+  factors: 64
+  regularization: 0.01
+  iterations: 20
+  alpha: 40
+
+retrieval:
+  embedding_dim: 64
+  age_bucket_dim: 8
+  occupation_dim: 8
+  gender_dim: 4
+  year_bucket_dim: 8
+  genre_hidden_dim: 32
+  mlp_hidden_dim: 128
+  batch_size: 256
+  epochs: 15
+  learning_rate: 0.001
+  weight_decay: 0.00001
+  num_workers: 0
+  top_k: 500
+
+ranking:
+  top_k: 10
+  num_leaves: 31
+  learning_rate: 0.05
+  n_estimators: 200
+  min_child_samples: 20

@@ -1,0 +1,22 @@
+.DS_Store
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# dataset (downloaded, never committed)
+data/raw/
+data/processed/
+
+# trained model artifacts
+models/
+*.pt
+*.pkl
+*.index
+*.bin
+
+# editor
+.vscode/
+.idea/
