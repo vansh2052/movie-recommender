@@ -82,3 +82,12 @@ in the top-10 — that's exactly the job LightGBM's LambdaRank reranking
 stage does, and the combination is what makes the two-stage architecture
 work. See `docs/DECISIONS.md` for the full breakdown of why retrieval-only
 underperforms and why the combined pipeline still wins.
+
+**Why these absolute numbers look low:** Recall@10 = 8% means finding the
+one specific movie a user watches next among ~3,700+ unseen movies in just
+10 guesses — a random recommender would score ~0.27% at that task, so 8.28%
+is ~30x better than chance. This also ranks against the *entire* catalog
+rather than a small sampled set of negatives (a common simplification in
+published benchmarks that makes their numbers look higher but isn't
+comparable here). See `docs/DECISIONS.md` ("Why the absolute Recall@10 (8%)
+and NDCG@10 (4%) look low") for the full explanation.

@@ -283,6 +283,52 @@ combining a recall-oriented Stage 1 with a precision-oriented Stage 2
 produces a better final Top-10 than any single model here, even one (ALS)
 that beats Stage 1 in isolation.
 
+## Why the absolute Recall@10 (8%) and NDCG@10 (4%) look low
+
+**Observation:** even the best model (the full pipeline) only gets
+Recall@10 = 0.0828 and NDCG@10 = 0.0423 on test. In isolation these numbers
+look weak, but they're a property of how hard this specific evaluation task
+is by construction, not a sign of a broken pipeline.
+
+**Why the task is intrinsically hard:** Recall@10 here means: out of the
+entire catalog minus what the user has already seen (~3,700+ candidate
+movies), did the model place the *one specific movie* the user will interact
+with next somewhere in 10 guesses? That's a needle-in-a-haystack task, not
+"did we recommend something reasonable." A **random** recommender choosing
+10 movies uniformly from ~3,700 unseen candidates would get an expected
+Recall@10 of about 10/3,700 ≈ **0.27%**. The full pipeline's 8.28% is
+roughly **30x better than random**, and even popularity alone (3.93%) is
+already ~15x better than random just from recommending generally popular
+movies. Judged against that baseline — not against an intuitive "8% sounds
+low" reaction — the result is strong, not weak.
+
+**Why this looks lower than numbers reported in some papers:** many
+published MovieLens leave-one-out results (e.g. the original Neural
+Collaborative Filtering paper) don't rank the held-out item against the
+full catalog — they rank it against just 99 randomly sampled negative items,
+so their "HR@10" means "top-10 out of 100 candidates," not "top-10 out of
+~3,700." That's a fundamentally easier task and the two numbers are not
+directly comparable. This project ranks against the entire remaining
+catalog every time (the FAISS retrieval step searches the whole item set,
+not a small sampled pool), which is more realistic and more representative
+of a real deployed system, at the cost of lower absolute metric values.
+
+**Why NDCG@10 (0.042) is roughly half of Recall@10 (0.083):** NDCG
+additionally discounts by rank position (a hit at position 1 counts fully;
+a hit at position 10 counts only `1/log2(11) ≈ 30%` as much). NDCG@10 being
+about half of Recall@10 says that when the pipeline does find the right
+movie in the top 10, it tends to land more toward the middle/back of that
+list rather than at #1 — itself a legitimate (if unflattering) signal about
+ranking sharpness, not an error.
+
+**The comparison that actually matters:** every model (popularity, ALS,
+retrieval-only, full pipeline) is evaluated identically — same test users,
+same full-catalog candidate pool, same K=10 — so the *relative* comparison,
+not the absolute value, is the meaningful result: the full pipeline beats
+ALS by +27% Recall@10 / +29% NDCG@10. That relative lift is what
+demonstrates the two-stage architecture is working, independent of what the
+raw percentages look like.
+
 ## Leakage prevention in ranker features
 
 **Decision:** every statistic used as a feature is computed "as of" the split
@@ -469,3 +515,19 @@ no reason to import `torch`, so the missing dependency surfaced as a hard
 `OSError` there. The correct fix was installing the real dependency
 (`brew install libomp`), not relying on an incidental import order in a
 script that shouldn't need `torch` at all.
+
+**Q: Your final Recall@10 is only 8% and NDCG@10 only 4%. Isn't that a bad
+result?**
+A: See "Why the absolute Recall@10 (8%) and NDCG@10 (4%) look low" above —
+in short, no: those numbers have to be judged against the task's difficulty,
+not read as a percentage in isolation. Recall@10 here means finding the one
+specific movie a user will watch next among the ~3,700+ movies they haven't
+seen, using only 10 guesses — a random recommender would score about 0.27%
+on that task, so 8.28% is roughly 30x better than chance. Numbers like 0.6-
+0.7 seen in some published leave-one-out papers typically rank the true
+item against only 99 sampled negatives (top-10 out of 100 candidates), a
+much easier task than ranking against the full catalog the way this project
+does — the two aren't directly comparable. The metric that actually matters
+for judging this project is the *relative* one: the full pipeline beats ALS
+by +27% Recall@10 / +29% NDCG@10 under an identical evaluation protocol,
+which is what demonstrates the two-stage architecture adds real value.
