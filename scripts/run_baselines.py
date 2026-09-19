@@ -3,6 +3,13 @@
 Usage: python -m scripts.run_baselines
 """
 
+import os
+
+# Must be set before numpy/scipy/implicit are imported: OpenBLAS reads this
+# at library load time, and letting it spin up its own thread pool on top
+# of implicit's parallelism causes severe slowdowns.
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+
 import time
 from collections import defaultdict
 from pathlib import Path

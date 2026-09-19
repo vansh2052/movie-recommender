@@ -22,3 +22,16 @@ make baselines       # fit + evaluate popularity and ALS baselines
 
 See `Makefile` for the remaining pipeline stages (retrieval training/eval,
 ranking training/eval, API, Streamlit demo) as they are added.
+
+## Phase 1 results (real run on MovieLens 1M)
+
+575,281 positive interactions (rating >= 4) from 6,038 users over 3,883
+movies, split per-user by timestamp (see `docs/DECISIONS.md`).
+
+| Model | Split | Recall@10 | Recall@500 | NDCG@10 | NDCG@500 | Coverage@500 |
+|---|---|---|---|---|---|---|
+| Popularity | test | 0.0393 | 0.5647 | 0.0193 | 0.0970 | 0.3544 |
+| ALS | test | 0.0654 | 0.7502 | 0.0329 | 0.1402 | 0.8290 |
+
+Full table (val + test) in `reports/results.md`. EDA figures in
+`reports/figures/`.

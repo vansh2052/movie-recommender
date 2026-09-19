@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 import scipy.sparse as sp
 from implicit.als import AlternatingLeastSquares
+from threadpoolctl import threadpool_limits
 
 from src.config import CONFIG
 
@@ -41,7 +42,12 @@ class ALSBaseline:
             (data, (rows, cols)),
             shape=(len(user_ids), len(movie_ids)),
         )
-        self.model.fit(self.user_items)
+        # implicit's ALS uses BLAS internally; letting OpenBLAS spin up its
+        # own thread pool on top of implicit's own parallelism causes severe
+        # slowdowns (a warning implicit itself raises), so pin BLAS to 1
+        # thread for the duration of the fit.
+        with threadpool_limits(1, "blas"):
+            self.model.fit(self.user_items)
         return self
 
     def recommend(self, user_id: int, exclude_items: set, k: int) -> list:

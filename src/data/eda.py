@@ -68,6 +68,7 @@ def plot_genre_popularity(movies: pd.DataFrame, ratings: pd.DataFrame, out_dir: 
     fig, ax = plt.subplots(figsize=(8, 5))
     sns.barplot(x=series.values, y=series.index, ax=ax, color="#C44E52")
     ax.set_xlabel("Number of ratings")
+    ax.set_ylabel("Genre")
     ax.set_title("Genre popularity (by rating count)")
     fig.tight_layout()
     fig.savefig(out_dir / "genre_popularity.png", dpi=150)

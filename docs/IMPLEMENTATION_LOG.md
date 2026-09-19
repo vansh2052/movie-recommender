@@ -32,7 +32,18 @@ users}.parquet`.
 
 **How to run:** `make download-data` (or `python -m scripts.run_download`).
 
-**Results:** *(filled in after running against the real dataset — see below)*
+**Results (real run on ml-1m):**
+- 1,000,209 raw ratings -> 575,281 positive interactions (rating >= 4)
+- 6,038 users with at least one positive, 3,883 movies
+- Split sizes: 563,209 train / 6,035 val / 6,037 test
+
+**Bug fixed along the way:** the first implementation of `temporal_split`
+used `groupby("user_id").apply(...)` with a per-group Python function, which
+triggered a pandas 2.x `FutureWarning` about grouping-column behavior
+changing. Rewrote it as a fully vectorized version using
+`groupby.cumcount(ascending=False)` (rank from the end of each user's
+timestamp-sorted history) compared against each group's size — same split
+semantics, verified to produce identical counts, no warning, and faster.
 
 ### Step 3: Evaluation metrics + unit tests
 
@@ -51,6 +62,11 @@ distribution, ratings-per-user (long tail, log scale), ratings-per-movie
 
 **How to run:** `make eda`.
 
+**Results:** 4 PNGs saved to `reports/figures/`. Rating distribution
+confirms the well-known MovieLens-1M skew toward 4-star ratings (~349k
+4-star vs. ~56k 1-star); genre popularity confirms Comedy and Drama dominate
+rating volume, Documentary/Film-Noir/Western are the long tail.
+
 ### Step 5: Popularity and ALS baselines
 
 `src/baselines/popularity.py` ranks items by train-split positive count.
@@ -63,4 +79,23 @@ results table into `reports/results.md` under "Phase 1: Baselines".
 
 **How to run:** `make baselines`.
 
-**Results:** *(filled in after running against the real dataset — see below)*
+**Results (real run on ml-1m, see `reports/results.md`):**
+
+| Model | Split | Recall@10 | Recall@500 | NDCG@10 | NDCG@500 | Coverage@500 |
+|---|---|---|---|---|---|---|
+| Popularity | test | 0.0393 | 0.5647 | 0.0193 | 0.0970 | 0.3544 |
+| ALS | test | 0.0654 | 0.7502 | 0.0329 | 0.1402 | 0.8290 |
+
+ALS clearly beats popularity on every metric on held-out test data (e.g.
+Recall@10 0.065 vs 0.039, a ~67% relative improvement), which is the sanity
+check for personalization actually adding value before building the more
+complex retrieval/ranking stages on top.
+
+**Problem encountered + fix:** `implicit`'s ALS raised a `RuntimeWarning`
+that OpenBLAS's own 8-thread pool conflicts with implicit's internal
+parallelism, which can silently cause severe slowdowns. Fixed by setting
+`OPENBLAS_NUM_THREADS=1` at the top of `scripts/run_baselines.py` (must be
+set before numpy/scipy/implicit are imported, since OpenBLAS reads it at
+library load time) and, defensively, wrapping the `model.fit(...)` call in
+`threadpoolctl.threadpool_limits(1, "blas")` inside `ALSBaseline.fit` for
+any other entry point that constructs this class.
