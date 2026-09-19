@@ -43,20 +43,15 @@ def temporal_split(
 
     df = positives.sort_values(["user_id", "timestamp", "movie_id"], kind="mergesort").reset_index(drop=True)
 
-    def assign(group: pd.DataFrame) -> pd.DataFrame:
-        n = len(group)
-        labels = ["train"] * n
-        if n >= min_positives_for_val:
-            labels[-1] = "test"
-            labels[-2] = "val"
-        elif n >= min_positives_for_test:
-            labels[-1] = "test"
-        # n == 1 (or below min_positives_for_test): everything stays "train"
-        group = group.copy()
-        group["split"] = labels
-        return group
+    group_sizes = df.groupby("user_id")["user_id"].transform("size")
+    rank_from_end = df.groupby("user_id").cumcount(ascending=False)
 
-    df = df.groupby("user_id", group_keys=False).apply(assign)
+    is_test = (group_sizes >= min_positives_for_test) & (rank_from_end == 0)
+    is_val = (group_sizes >= min_positives_for_val) & (rank_from_end == 1)
+
+    df["split"] = "train"
+    df.loc[is_test, "split"] = "test"
+    df.loc[is_val, "split"] = "val"
     return df
 
 
